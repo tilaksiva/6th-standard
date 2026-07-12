@@ -21,32 +21,80 @@ backend, just open a file.
 
 ## What's inside
 
-- **5 subjects**, 2–3 chapters each: Mathematics, Science, Social Studies,
-  English, Telugu — 15 chapters, ~130 questions, plus term/definition sets
-  for the matching games.
-- **6 game modes**: Adventure Quiz (adaptive difficulty + hearts), Time
-  Challenge (60-second rapid fire), Memory Match, Match the Following
+- **6 subjects, all 83 official TS SCERT Class 6 chapters**: Mathematics
+  (14), Science (16), Social Studies (21), English (8 units), Telugu (12),
+  Hindi (12) — 471 questions and 498 term/definition pairs in total.
+- **6 game modes**: Adventure Quiz (a true mastery loop — see below),
+  Time Challenge (60-second rapid fire), Memory Match, Match the Following
   (drag & drop), Spin & Win (bonus multiplier round), and a Boss Battle that
-  pools the hardest questions once every chapter in a subject is cleared.
+  unlocks once every chapter in a subject is mastered.
 - A winding **trail map** for chapter selection — clearing a chapter reveals
-  the next stop, with stars showing how well it was done.
+  the next stop, with stars showing how cleanly it was done.
 - Coins, XP, a daily streak counter, and unlockable badges.
 - Every answer — right or wrong — shows a plain-language explanation, so
   wrong answers teach rather than just penalize.
 
-## A note on content scope
+## Learning from wrong answers
 
-This is a solid, fully working starting set rather than an exhaustive replica
-of the textbook — think of it as a strong first "world map" that's easy to
-expand:
+Every question carries two extra fields beyond the original `explain`
+one-liner:
+- `explainSteps`: an array of short, numbered reasoning steps that walk the
+  kid to the answer.
+- `explainDiagram`: a key into a built-in library of inline SVG diagrams
+  (`DIAGRAM_BUILDERS` in `script.js`, 20 types) — number lines, place value
+  blocks, magnet poles, the water cycle, circuits, maps/compass, latitude &
+  longitude, landforms, government structure tiers, trade flow, and more.
+  These are drawn live in the browser with no external images, so the app
+  stays fully offline.
 
-- **Maths, Science, Social Studies, English**: 2–3 chapters per subject on
-  core Class 6 topics (numbers & geometry; food & materials & body movement;
-  early humans, early cities, and the globe; nouns/pronouns and verb tenses).
-- **Telugu**: kept to the alphabet and basic grammar, described generically,
-  since exact lesson titles/poems vary by print year — swap in the real
-  chapter names or a poem from your child's actual textbook if you'd like a
-  tighter match.
+When a question is answered **wrong**, a warmer, exciting breakdown appears:
+the correct answer restated, the step-by-step reasoning, and a diagram where
+one genuinely helps. A **correct** answer stays light-touch (just the
+original one-liner + a quick "yes, exactly right!"), so the extra detail
+shows up exactly when it's most useful — after a mistake, not before it.
+
+**Coverage: all 6 subjects, all 83 chapters, all 471 questions.** Math,
+Science and Social Studies use diagrams where visual aids help; English,
+Telugu and Hindi use the step breakdown without diagrams, since that content
+is grammar/vocabulary/literature-based rather than visual. Every explanation
+was written and validated individually (not templated), and the whole thing
+was checked with a jsdom smoke test that clicks through all 83 chapters
+forcing wrong answers and confirms the explain box renders correctly with
+zero JS errors.
+
+## How Adventure Quiz works (the mastery loop)
+
+This isn't a fixed-length quiz. Adventure Quiz queues *every* question in a
+chapter. Get one right and it's mastered for good. Get one wrong and it
+comes back around a few questions later for another try — the chapter only
+finishes once every concept has been answered correctly at least once.
+Stars (0–3) reflect how many were right on the *first* try, but the chapter
+still unlocks the next one regardless, since the point is that by the end,
+every concept has actually been learned.
+
+## A note on content scope and accuracy
+
+- Chapter names and structure follow the official TS SCERT Class 6 syllabus,
+  verified via web search (tsboardsolutions.in, apboardsolutions.in) in July
+  2026. **TS reportedly revised these textbooks for 2025-26 under NEP 2020**,
+  and what's built here reflects the well-documented older edition — worth a
+  quick cross-check against your child's actual current textbook, especially
+  chapter titles.
+- **Maths, Science, Social Studies**: full official chapter list, 5–6
+  questions per chapter written directly from the syllabus topics.
+- **English**: all 8 official units. For units built around specific stories
+  I don't have confident access to the exact text of (e.g. regional or
+  lesser-known lessons), questions lean on grammar and vocabulary tied to the
+  unit's theme rather than invented plot details. Units featuring genuinely
+  well-documented public-domain material (Rip Van Winkle, Gulliver's Travels)
+  or real historical/sporting figures (P.T. Usha, Wilma Rudolph, Tanaji
+  Malusare, Bammera Pothana) include accurate general-knowledge questions
+  about them.
+- **Telugu and Hindi**: all 12 official lessons for each, by title. Since I
+  don't have the exact lesson texts, questions focus on vocabulary and
+  grammar tied to each lesson's theme rather than invented comprehension
+  details — genuinely useful for language-building, but not a substitute for
+  reading the actual lesson.
 - If any chapter names don't match your child's exact textbook edition, the
   content underneath is still accurate Class 6-level material — just retitle
   the chapter in `questions.js`.

@@ -18,7 +18,7 @@ const BADGES = {
 };
 
 const MODES = {
-  adventure: { icon: "🧭", name: "Adventure Quiz", desc: "Answer questions that get harder as you go. 3 hearts." },
+  adventure: { icon: "🧭", name: "Adventure Quiz", desc: "Work through every idea in the chapter. Get one wrong and it comes back around for another try." },
   time:      { icon: "⏱️", name: "Time Challenge", desc: "60 seconds, as many correct answers as you can!" },
   memory:    { icon: "🧠", name: "Memory Match",    desc: "Flip cards to match terms with meanings." },
   match:     { icon: "🎯", name: "Match the Following", desc: "Drag each term onto its correct meaning." },
@@ -259,14 +259,14 @@ function isChapterUnlocked(subjectKey, index) {
   const subj = QUESTION_BANK[subjectKey];
   const prevChapter = subj.chapters[index - 1];
   const prevProgress = state.progress[subjectKey] && state.progress[subjectKey][prevChapter.id];
-  return !!(prevProgress && prevProgress.stars >= 1);
+  return !!(prevProgress && prevProgress.adventureDone);
 }
 
 function isBossUnlocked(subjectKey) {
   const subj = QUESTION_BANK[subjectKey];
   return subj.chapters.every(ch => {
     const p = state.progress[subjectKey] && state.progress[subjectKey][ch.id];
-    return p && p.stars >= 1;
+    return p && p.adventureDone;
   });
 }
 
@@ -401,17 +401,26 @@ function buildAdaptiveQueue(chapter) {
   return { easy: shuffle(byDiff.easy), medium: shuffle(byDiff.medium), hard: shuffle(byDiff.hard) };
 }
 
+/* Adventure Quiz = a MASTERY LOOP, not a fixed-length quiz.
+   Every question in the chapter goes into the queue once. Answer correctly
+   and it's mastered (removed for good). Answer wrong and it's reinserted a
+   few questions later so it comes back around for another try - the run
+   only ends once every question has been answered correctly at least once. */
 function renderAdventureQuiz(subjectKey, chapterId) {
   const subj = QUESTION_BANK[subjectKey];
   const chapter = subj.chapters.find(c => c.id === chapterId);
   const pools = buildAdaptiveQueue(chapter);
-  const maxQuestions = Math.min(8, chapter.questions.length);
+  const orderedQuestions = [...pools.easy, ...pools.medium, ...pools.hard];
 
   quizRuntime = {
     kind: "adventure", subjectKey, chapterId,
-    pools, tierOrder: ["easy", "medium", "hard"], tierIdx: 0,
-    asked: 0, maxQuestions, correct: 0, hearts: 3,
-    usedIds: new Set(), coinsEarned: 0, xpEarned: 0
+    queue: orderedQuestions.map(q => ({ question: q, attempts: 0 })),
+    totalUnique: orderedQuestions.length,
+    masteredCount: 0,
+    firstTryCorrect: 0,
+    roundsAnswered: 0,
+    maxRounds: orderedQuestions.length * 5 + 10, // generous safety net, not a fail state
+    coinsEarned: 0, xpEarned: 0
   };
   nextAdventureQuestion();
 }
@@ -424,57 +433,50 @@ function tierCoinsXp(diff) {
 
 function nextAdventureQuestion() {
   const r = quizRuntime;
-  if (r.asked >= r.maxQuestions || r.hearts <= 0) { finishAdventureQuiz(); return; }
+  if (r.queue.length === 0 || r.roundsAnswered >= r.maxRounds) { finishAdventureQuiz(); return; }
 
-  const tier = r.tierOrder[r.tierIdx];
-  let pool = r.pools[tier].filter(q => !r.usedIds.has(q.q));
-  // fall back to any tier with remaining questions if current tier is exhausted
-  if (pool.length === 0) {
-    for (const t of r.tierOrder) {
-      const alt = r.pools[t].filter(q => !r.usedIds.has(q.q));
-      if (alt.length) { pool = alt; break; }
-    }
-  }
-  if (pool.length === 0) { finishAdventureQuiz(); return; }
-
-  const question = pool[0];
-  r.usedIds.add(question.q);
-  r.currentQuestion = question;
-  renderQuizQuestion(question, {
-    heartsLeft: r.hearts,
-    progressLabel: `Q${r.asked + 1} / ${r.maxQuestions}`,
-    onAnswer: (isCorrect, optIdx) => handleAdventureAnswer(isCorrect)
+  const item = r.queue[0];
+  r.currentItem = item;
+  renderQuizQuestion(item.question, {
+    mastery: { mastered: r.masteredCount, total: r.totalUnique },
+    progressLabel: item.attempts > 0 ? "Let's try this one again" : "",
+    onAnswer: (isCorrect) => handleAdventureAnswer(isCorrect)
   });
 }
 
 function handleAdventureAnswer(isCorrect) {
   const r = quizRuntime;
-  const diff = r.currentQuestion.difficulty;
-  const reward = tierCoinsXp(diff);
+  const item = r.currentItem;
+  const reward = tierCoinsXp(item.question.difficulty);
+  r.roundsAnswered++;
+
   if (isCorrect) {
-    r.correct++;
+    if (item.attempts === 0) r.firstTryCorrect++;
     r.coinsEarned += reward.coins; r.xpEarned += reward.xp;
-    r.tierIdx = Math.min(r.tierIdx + 1, 2); // adapt: get harder
+    r.masteredCount++;
+    r.queue.shift(); // mastered - out of rotation for good
   } else {
-    r.hearts--;
-    r.tierIdx = Math.max(r.tierIdx - 1, 0); // adapt: ease off
+    item.attempts++;
+    r.queue.shift();
+    const reinsertAt = Math.min(3, r.queue.length); // resurfaces a few questions later, not immediately
+    r.queue.splice(reinsertAt, 0, item);
   }
-  r.asked++;
-  updateQuizHud(r.hearts, `Q${Math.min(r.asked + 1, r.maxQuestions)} / ${r.maxQuestions}`);
+  updateQuizHud(undefined, item.attempts > 0 ? "Nearly there" : "", { mastered: r.masteredCount, total: r.totalUnique });
   document.getElementById("nextQuestionBtn").addEventListener("click", () => nextAdventureQuestion(), { once: true });
 }
 
 function finishAdventureQuiz() {
   const r = quizRuntime;
-  const accuracy = r.asked ? Math.round((r.correct / r.asked) * 100) : 0;
-  const stars = r.hearts <= 0 ? 0 : (accuracy >= 90 ? 3 : accuracy >= 70 ? 2 : accuracy >= 40 ? 1 : 0);
+  const accuracy = r.totalUnique ? Math.round((r.firstTryCorrect / r.totalUnique) * 100) : 0;
+  const stars = accuracy >= 90 ? 3 : accuracy >= 70 ? 2 : accuracy >= 40 ? 1 : 0;
+  const fullyMastered = r.queue.length === 0; // false only if the safety-net round cap was hit
 
   awardCoins(r.coinsEarned);
   awardXp(r.xpEarned);
 
   const progress = getChapterProgress(r.subjectKey, r.chapterId);
-  const isFirstClear = !progress.adventureDone && stars >= 1;
-  progress.adventureDone = progress.adventureDone || stars >= 1;
+  const isFirstClear = !progress.adventureDone && fullyMastered;
+  progress.adventureDone = progress.adventureDone || fullyMastered;
   progress.stars = Math.max(progress.stars, stars);
   progress.bestAccuracy = Math.max(progress.bestAccuracy, accuracy);
   saveState();
@@ -484,12 +486,15 @@ function finishAdventureQuiz() {
   const subj = QUESTION_BANK[r.subjectKey];
   if (subj.chapters.every(ch => (state.progress[r.subjectKey][ch.id] || {}).stars === 3)) awardBadge("subject_master");
 
+  const retriesNeeded = r.totalUnique - r.firstTryCorrect;
   showResults({
-    title: stars >= 1 ? "Chapter cleared!" : "Good try!",
-    emoji: stars === 3 ? "🏅" : stars >= 1 ? "🎉" : "🌱",
+    title: fullyMastered ? "Every idea mastered!" : "Great effort — let's pick this up again soon",
+    emoji: stars === 3 ? "🏅" : fullyMastered ? "🎉" : "🌱",
     stars, accuracy,
     coins: r.coinsEarned, xp: r.xpEarned,
-    correct: r.correct, total: r.asked,
+    customStat: fullyMastered
+      ? { label: retriesNeeded > 0 ? "Needed another look" : "First-try correct", value: retriesNeeded > 0 ? `${retriesNeeded}/${r.totalUnique}` : `${r.firstTryCorrect}/${r.totalUnique}` }
+      : { label: "Mastered so far", value: `${r.masteredCount}/${r.totalUnique}` },
     onRetry: () => renderAdventureQuiz(r.subjectKey, r.chapterId),
     onModes: () => goToModes(r.subjectKey, r.chapterId),
     onTrail: () => goToChapters(r.subjectKey)
@@ -497,8 +502,317 @@ function finishAdventureQuiz() {
 }
 
 /* ---- generic question renderer used by adventure/time/boss ---- */
-function renderQuizQuestion(question, { heartsLeft, timerText, progressLabel, onAnswer }) {
+/* ---- Explanation panel: richer for wrong answers, light for right ones ---- */
+function buildExplainHtml(question, isCorrect) {
+  const correctText = question.options[question.answer];
+  const hasSteps = Array.isArray(question.explainSteps) && question.explainSteps.length > 0;
+  const diagramSvg = question.explainDiagram ? getDiagramSvg(question.explainDiagram) : "";
+
+  if (isCorrect) {
+    return `
+      <div class="explain-header correct-header">🎉 Yes — exactly right!</div>
+      <div class="explain-text">${question.explain}</div>
+    `;
+  }
+
+  const bodyHtml = hasSteps
+    ? `<ol class="explain-steps">${question.explainSteps.map(s => `<li>${s}</li>`).join("")}</ol>`
+    : `<div class="explain-text">${question.explain}</div>`;
+
+  return `
+    <div class="explain-header wrong-header">💡 Not this time — but here's the fun part!</div>
+    <div class="explain-correct-answer">The correct answer is <strong>${correctText}</strong>. Let's see why, step by step:</div>
+    ${bodyHtml}
+    ${diagramSvg ? `<div class="explain-diagram">${diagramSvg}</div>` : ""}
+    <div class="explain-encourage">✨ Now you know it for good — spot a question like this again and you'll nail it!</div>
+  `;
+}
+
+/* ---- Tiny inline-SVG diagram library (offline-safe, no external images) ---- */
+function svgWrap(inner, viewBox = "0 0 280 150") {
+  return `<svg viewBox="${viewBox}" class="diagram-svg" role="img" aria-hidden="true">${inner}</svg>`;
+}
+const DIAGRAM_BUILDERS = {
+  magnetPoles: () => svgWrap(`
+    <rect x="60" y="55" width="70" height="40" fill="#E24B3C"/>
+    <rect x="130" y="55" width="70" height="40" fill="#3C7FE2"/>
+    <rect x="60" y="55" width="140" height="40" fill="none" stroke="#1B3B36" stroke-width="3" rx="6"/>
+    <text x="95" y="80" text-anchor="middle" fill="#fff" font-family="Baloo 2" font-size="22" font-weight="700">N</text>
+    <text x="165" y="80" text-anchor="middle" fill="#fff" font-family="Baloo 2" font-size="22" font-weight="700">S</text>
+    <circle cx="230" cy="75" r="10" fill="#8A8A8A"/>
+    <text x="230" y="110" text-anchor="middle" fill="#1B3B36" font-family="Nunito" font-size="12">iron nail</text>
+    <path d="M200 75 L216 75" stroke="#1B3B36" stroke-width="2" marker-end="url(#arrow)"/>
+    <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#1B3B36"/></marker></defs>
+  `),
+  waterCycle: () => svgWrap(`
+    <circle cx="45" cy="35" r="20" fill="#FFC93C"/>
+    <ellipse cx="150" cy="30" rx="38" ry="18" fill="#fff" stroke="#4FC3E8" stroke-width="2"/>
+    <path d="M45 55 L100 90" stroke="#1D8A6C" stroke-width="2.5" marker-end="url(#a2)" stroke-dasharray="3 3"/>
+    <text x="55" y="75" font-family="Nunito" font-size="11" fill="#1B3B36">evaporation</text>
+    <path d="M140 48 L110 100" stroke="#4FC3E8" stroke-width="2.5" marker-end="url(#a2)"/>
+    <path d="M160 48 L170 100" stroke="#4FC3E8" stroke-width="2.5" marker-end="url(#a2)"/>
+    <text x="175" y="75" font-family="Nunito" font-size="11" fill="#1B3B36">rain</text>
+    <path d="M20 115 Q40 105 60 115 T100 115 T140 115 T180 115 T220 115" fill="none" stroke="#4FC3E8" stroke-width="4"/>
+    <defs><marker id="a2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#1D8A6C"/></marker></defs>
+  `),
+  transparency: () => svgWrap(`
+    <rect x="15" y="30" width="60" height="70" fill="#DFF3FA" stroke="#4FC3E8" stroke-width="3" rx="6"/>
+    <circle cx="45" cy="65" r="9" fill="#FF6B5B"/>
+    <text x="45" y="115" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">Transparent</text>
+    <rect x="110" y="30" width="60" height="70" fill="#EAF6EE" stroke="#7ED957" stroke-width="3" rx="6"/>
+    <circle cx="140" cy="65" r="9" fill="#FF6B5B" opacity="0.35"/>
+    <text x="140" y="115" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">Translucent</text>
+    <rect x="205" y="30" width="60" height="70" fill="#5A4A42" stroke="#1B3B36" stroke-width="3" rx="6"/>
+    <text x="235" y="115" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">Opaque</text>
+  `),
+  habitatAdapt: () => svgWrap(`
+    <circle cx="55" cy="35" r="18" fill="#FFC93C"/>
+    <path d="M55 70 L45 110 M55 70 L65 110 M55 85 L35 95 M55 85 L75 95" stroke="#7ED957" stroke-width="4" stroke-linecap="round"/>
+    <text x="55" y="130" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">hot & dry</text>
+    <path d="M215 20 L220 35 L235 35 L223 45 L228 60 L215 50 L202 60 L207 45 L195 35 L210 35 Z" fill="#4FC3E8"/>
+    <text x="215" y="90" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">freezing cold</text>
+    <text x="140" y="75" text-anchor="middle" font-family="Baloo 2" font-size="16" fill="#1B3B36">vs</text>
+  `),
+  filtration: () => svgWrap(`
+    <path d="M90 20 L190 20 L145 70 Z" fill="none" stroke="#1D8A6C" stroke-width="3"/>
+    <path d="M100 30 L190 30" stroke="#8A8A8A" stroke-width="3" stroke-dasharray="4 3"/>
+    <circle cx="115" cy="15" r="4" fill="#5A4A42"/><circle cx="140" cy="10" r="4" fill="#5A4A42"/><circle cx="165" cy="15" r="4" fill="#5A4A42"/>
+    <rect x="135" y="70" width="20" height="35" fill="none" stroke="#1D8A6C" stroke-width="3"/>
+    <path d="M145 105 Q150 118 145 130" stroke="#4FC3E8" stroke-width="3" fill="none"/>
+    <text x="60" y="20" font-family="Nunito" font-size="11" fill="#1B3B36">mixture</text>
+    <text x="145" y="145" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">clear liquid through</text>
+  `),
+  fibreToFabric: () => svgWrap(`
+    <rect x="10" y="45" width="65" height="40" rx="8" fill="#EAF6EE" stroke="#7ED957" stroke-width="2.5"/>
+    <text x="42" y="70" text-anchor="middle" font-family="Baloo 2" font-size="13" fill="#1B3B36">Fibre</text>
+    <path d="M80 65 L100 65" stroke="#1B3B36" stroke-width="2.5" marker-end="url(#a3)"/>
+    <rect x="105" y="45" width="65" height="40" rx="8" fill="#FFF6E5" stroke="#FFC93C" stroke-width="2.5"/>
+    <text x="137" y="70" text-anchor="middle" font-family="Baloo 2" font-size="13" fill="#1B3B36">Yarn</text>
+    <path d="M175 65 L195 65" stroke="#1B3B36" stroke-width="2.5" marker-end="url(#a3)"/>
+    <rect x="200" y="45" width="65" height="40" rx="8" fill="#FDEAE7" stroke="#FF6B5B" stroke-width="2.5"/>
+    <text x="232" y="70" text-anchor="middle" font-family="Baloo 2" font-size="13" fill="#1B3B36">Fabric</text>
+    <text x="90" y="30" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">ginning/spinning</text>
+    <text x="185" y="30" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">weaving</text>
+    <defs><marker id="a3" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#1B3B36"/></marker></defs>
+  `),
+  plantParts: () => svgWrap(`
+    <ellipse cx="140" cy="35" rx="34" ry="14" fill="#7ED957"/>
+    <text x="140" y="16" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">leaf</text>
+    <circle cx="140" cy="45" r="8" fill="#FF6B5B"/>
+    <text x="170" y="45" font-family="Nunito" font-size="11" fill="#1B3B36">flower</text>
+    <rect x="137" y="50" width="6" height="45" fill="#1D8A6C"/>
+    <text x="110" y="75" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">stem</text>
+    <path d="M140 95 L120 125 M140 95 L160 125 M140 95 L140 130" stroke="#B98BE0" stroke-width="3" fill="none"/>
+    <text x="140" y="145" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">root</text>
+  `),
+  reversible: () => svgWrap(`
+    <text x="70" y="25" text-anchor="middle" font-family="Baloo 2" font-size="13" fill="#1D8A6C">Reversible</text>
+    <rect x="30" y="40" width="35" height="30" fill="#DFF3FA" stroke="#4FC3E8" stroke-width="2"/>
+    <text x="47" y="60" text-anchor="middle" font-family="Nunito" font-size="10">Ice</text>
+    <path d="M70 55 L95 55" stroke="#1D8A6C" stroke-width="2.5" marker-end="url(#a4)" marker-start="url(#a4s)"/>
+    <rect x="100" y="40" width="35" height="30" fill="#C9EAF7" stroke="#4FC3E8" stroke-width="2"/>
+    <text x="117" y="60" text-anchor="middle" font-family="Nunito" font-size="10">Water</text>
+    <text x="205" y="25" text-anchor="middle" font-family="Baloo 2" font-size="13" fill="#FF6B5B">Irreversible</text>
+    <rect x="170" y="40" width="35" height="30" fill="#FFF6E5" stroke="#E6A800" stroke-width="2"/>
+    <text x="187" y="60" text-anchor="middle" font-family="Nunito" font-size="10">Paper</text>
+    <path d="M205 55 L235 55" stroke="#FF6B5B" stroke-width="2.5" marker-end="url(#a4)"/>
+    <rect x="240" y="40" width="30" height="30" fill="#5A4A42" stroke="#1B3B36" stroke-width="2"/>
+    <text x="255" y="60" text-anchor="middle" font-family="Nunito" font-size="10" fill="#fff">Ash</text>
+    <defs>
+      <marker id="a4" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#1B3B36"/></marker>
+      <marker id="a4s" markerWidth="8" markerHeight="8" refX="2" refY="3" orient="auto"><path d="M6,0 L0,3 L6,6 Z" fill="#1B3B36"/></marker>
+    </defs>
+  `),
+  circuit: () => svgWrap(`
+    <rect x="40" y="30" width="180" height="80" fill="none" stroke="#1B3B36" stroke-width="4" rx="4"/>
+    <rect x="115" y="22" width="30" height="16" fill="#FFC93C" stroke="#1B3B36" stroke-width="2"/>
+    <text x="130" y="15" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">cell</text>
+    <circle cx="220" cy="70" r="16" fill="#FFF6E5" stroke="#1B3B36" stroke-width="3"/>
+    <text x="220" y="105" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">bulb</text>
+    <rect x="32" y="62" width="16" height="16" fill="#fff" stroke="#1B3B36" stroke-width="3"/>
+    <text x="40" y="105" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">switch</text>
+  `),
+  rulerCurve: () => svgWrap(`
+    <path d="M20 100 Q60 20 100 100 T180 100" fill="none" stroke="#1D8A6C" stroke-width="3" stroke-dasharray="2 4"/>
+    <text x="100" y="130" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">1. lay a thread along the curve</text>
+    <rect x="200" y="60" width="70" height="10" fill="#FFC93C" stroke="#1B3B36" stroke-width="1.5"/>
+    <text x="235" y="90" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">2. straighten & measure with ruler</text>
+  `),
+  jointTypes: () => svgWrap(`
+    <path d="M40 40 A30 30 0 0 1 40 100" fill="none" stroke="#1B3B36" stroke-width="6"/>
+    <circle cx="40" cy="70" r="14" fill="#4FC3E8" stroke="#1B3B36" stroke-width="2"/>
+    <text x="40" y="130" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">ball & socket</text>
+    <rect x="180" y="60" width="60" height="10" fill="#1B3B36"/>
+    <rect x="180" y="70" width="60" height="10" fill="#7ED957" transform="rotate(25 180 70)"/>
+    <text x="210" y="130" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">hinge (one direction)</text>
+  `),
+  shadowFormation: () => svgWrap(`
+    <circle cx="35" cy="40" r="14" fill="#FFC93C"/>
+    <rect x="110" y="25" width="14" height="60" fill="#5A4A42"/>
+    <path d="M49 40 L110 30 M49 45 L110 85" stroke="#FFC93C" stroke-width="1.5" stroke-dasharray="2 2"/>
+    <path d="M124 30 L200 95 L124 85 Z" fill="#B4B4B4" opacity="0.7"/>
+    <line x1="10" y1="100" x2="270" y2="100" stroke="#1B3B36" stroke-width="3"/>
+    <text x="160" y="130" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">shadow</text>
+  `),
+  mirrorInversion: () => svgWrap(`
+    <text x="70" y="80" text-anchor="middle" font-family="Baloo 2" font-size="42" fill="#1B3B36">R</text>
+    <line x1="140" y1="20" x2="140" y2="130" stroke="#4FC3E8" stroke-width="4"/>
+    <text x="140" y="145" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">mirror</text>
+    <text x="210" y="80" text-anchor="middle" font-family="Baloo 2" font-size="42" fill="#1B3B36" transform="scale(-1,1) translate(-420,0)">R</text>
+  `),
+  livingNonliving: () => svgWrap(`
+    <text x="65" y="25" text-anchor="middle" font-family="Baloo 2" font-size="13" fill="#1D8A6C">Living ✓</text>
+    <ellipse cx="45" cy="60" rx="20" ry="12" fill="#7ED957"/>
+    <circle cx="90" cy="65" r="14" fill="#FFC93C"/>
+    <text x="205" y="25" text-anchor="middle" font-family="Baloo 2" font-size="13" fill="#FF6B5B">Non-living ✗</text>
+    <rect x="185" y="55" width="30" height="22" fill="#8A8A8A" rx="4"/>
+    <circle cx="230" cy="70" r="14" fill="#5A4A42"/>
+  `),
+  placeValue: () => svgWrap(`
+    <text x="140" y="20" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">4 7, 2 5 8</text>
+    <rect x="30" y="35" width="45" height="45" fill="#FFF6E5" stroke="#E6A800" stroke-width="2" rx="6"/>
+    <text x="52" y="63" text-anchor="middle" font-family="Baloo 2" font-size="24" fill="#1B3B36">4</text>
+    <text x="52" y="95" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">ten-thou.</text>
+    <rect x="85" y="35" width="45" height="45" fill="#FFC93C" stroke="#E6A800" stroke-width="3" rx="6"/>
+    <text x="107" y="63" text-anchor="middle" font-family="Baloo 2" font-size="24" fill="#1B3B36">7</text>
+    <text x="107" y="95" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">thousands</text>
+    <rect x="140" y="35" width="45" height="45" fill="#FFF6E5" stroke="#E6A800" stroke-width="2" rx="6"/>
+    <text x="162" y="63" text-anchor="middle" font-family="Baloo 2" font-size="24" fill="#1B3B36">2</text>
+    <text x="162" y="95" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">hundreds</text>
+    <rect x="195" y="35" width="45" height="45" fill="#FFF6E5" stroke="#E6A800" stroke-width="2" rx="6"/>
+    <text x="217" y="63" text-anchor="middle" font-family="Baloo 2" font-size="24" fill="#1B3B36">5</text>
+    <text x="217" y="95" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">tens</text>
+  `),
+  numberLine: () => svgWrap(`
+    <line x1="15" y1="70" x2="265" y2="70" stroke="#1B3B36" stroke-width="3" marker-end="url(#nl1)"/>
+    ${[0,1,2,3,4,5,6,7,8].map(i => `<line x1="${25+i*28}" y1="63" x2="${25+i*28}" y2="77" stroke="#1B3B36" stroke-width="2"/><text x="${25+i*28}" y="95" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">${i-4}</text>`).join("")}
+    <defs><marker id="nl1" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#1B3B36"/></marker></defs>
+  `),
+  angleTypes: () => svgWrap(`
+    <path d="M40 100 L110 100" stroke="#1B3B36" stroke-width="3"/>
+    <path d="M40 100 L40 40" stroke="#1B3B36" stroke-width="3"/>
+    <path d="M40 90 L50 90 L50 100" fill="none" stroke="#4FC3E8" stroke-width="2"/>
+    <text x="45" y="120" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">right 90°</text>
+    <path d="M150 100 L215 100" stroke="#1B3B36" stroke-width="3"/>
+    <path d="M150 100 L185 45" stroke="#1B3B36" stroke-width="3"/>
+    <path d="M170 100 A20 20 0 0 0 163 82" fill="none" stroke="#7ED957" stroke-width="2"/>
+    <text x="180" y="120" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">acute &lt;90°</text>
+  `),
+  factorTree: () => svgWrap(`
+    <text x="140" y="20" text-anchor="middle" font-family="Baloo 2" font-size="14" fill="#1B3B36">12</text>
+    <path d="M140 25 L100 55 M140 25 L180 55" stroke="#1B3B36" stroke-width="2"/>
+    <text x="100" y="65" text-anchor="middle" font-family="Baloo 2" font-size="13" fill="#1D8A6C">2</text>
+    <text x="180" y="65" text-anchor="middle" font-family="Baloo 2" font-size="13" fill="#1D8A6C">6</text>
+    <path d="M180 70 L160 100 M180 70 L200 100" stroke="#1B3B36" stroke-width="2"/>
+    <text x="160" y="110" text-anchor="middle" font-family="Baloo 2" font-size="13" fill="#FF6B5B">2</text>
+    <text x="200" y="110" text-anchor="middle" font-family="Baloo 2" font-size="13" fill="#FF6B5B">3</text>
+    <text x="140" y="140" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">break numbers into prime factors</text>
+  `),
+  fractionBar: () => svgWrap(`
+    <rect x="20" y="30" width="240" height="35" fill="none" stroke="#1B3B36" stroke-width="2"/>
+    <line x1="80" y1="30" x2="80" y2="65" stroke="#1B3B36" stroke-width="2"/>
+    <line x1="140" y1="30" x2="140" y2="65" stroke="#1B3B36" stroke-width="2"/>
+    <line x1="200" y1="30" x2="200" y2="65" stroke="#1B3B36" stroke-width="2"/>
+    <rect x="20" y="30" width="120" height="35" fill="#FFC93C" opacity="0.55"/>
+    <text x="140" y="90" text-anchor="middle" font-family="Nunito" font-size="12" fill="#1B3B36">2 of 4 equal parts shaded = 2/4</text>
+  `),
+  perimeterArea: () => svgWrap(`
+    <rect x="70" y="30" width="120" height="70" fill="#EAF6EE" stroke="#1D8A6C" stroke-width="4"/>
+    <text x="130" y="20" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">perimeter = walk all the way around the edge</text>
+    <text x="130" y="70" text-anchor="middle" font-family="Nunito" font-size="12" fill="#1D8A6C">area = fill the inside</text>
+  `),
+  ratioBar: () => svgWrap(`
+    <rect x="20" y="40" width="20" height="30" fill="#4FC3E8"/><rect x="42" y="40" width="20" height="30" fill="#4FC3E8"/>
+    <text x="41" y="90" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">part A</text>
+    <text x="100" y="60" text-anchor="middle" font-family="Baloo 2" font-size="16" fill="#1B3B36">:</text>
+    <rect x="130" y="40" width="20" height="30" fill="#FF6B5B"/><rect x="152" y="40" width="20" height="30" fill="#FF6B5B"/><rect x="174" y="40" width="20" height="30" fill="#FF6B5B"/><rect x="196" y="40" width="20" height="30" fill="#FF6B5B"/>
+    <text x="163" y="90" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">part B</text>
+  `),
+  symmetryFold: () => svgWrap(`
+    <rect x="60" y="30" width="80" height="80" fill="#EAF6EE" stroke="#1D8A6C" stroke-width="3"/>
+    <line x1="100" y1="25" x2="100" y2="115" stroke="#FF6B5B" stroke-width="2" stroke-dasharray="4 3"/>
+    <text x="100" y="130" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">fold line — both sides match exactly</text>
+  `),
+  shapes3D2D: () => svgWrap(`
+    <path d="M40 40 L100 40 L100 100 L40 100 Z" fill="none" stroke="#1D8A6C" stroke-width="3"/>
+    <text x="70" y="120" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">2D: flat square</text>
+    <path d="M170 45 L215 45 L215 90 L170 90 Z" fill="#EAF6EE" stroke="#1D8A6C" stroke-width="2"/>
+    <path d="M170 45 L190 30 L235 30 L215 45" fill="#DFF3FA" stroke="#1D8A6C" stroke-width="2"/>
+    <path d="M215 45 L235 30 L235 75 L215 90" fill="#C9EAF7" stroke="#1D8A6C" stroke-width="2"/>
+    <text x="200" y="120" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">3D: solid cube</text>
+  `),
+  mapCompass: () => svgWrap(`
+    <rect x="30" y="20" width="220" height="110" fill="#EAF6EE" stroke="#1D8A6C" stroke-width="3" rx="8"/>
+    <path d="M140 30 L140 120 M60 75 L220 75" stroke="#7ED957" stroke-width="1.5" stroke-dasharray="3 3"/>
+    <text x="140" y="18" text-anchor="middle" font-family="Baloo 2" font-size="14" fill="#1D8A6C">N</text>
+    <text x="140" y="140" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">S</text>
+    <text x="255" y="79" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">E</text>
+    <text x="25" y="79" text-anchor="middle" font-family="Nunito" font-size="11" fill="#1B3B36">W</text>
+    <path d="M140 30 L146 45 L134 45 Z" fill="#FF6B5B"/>
+  `),
+  globeLatLong: () => svgWrap(`
+    <circle cx="140" cy="75" r="55" fill="#DFF3FA" stroke="#1D8A6C" stroke-width="3"/>
+    <ellipse cx="140" cy="75" rx="55" ry="18" fill="none" stroke="#4FC3E8" stroke-width="2"/>
+    <ellipse cx="140" cy="75" rx="20" ry="55" fill="none" stroke="#FFC93C" stroke-width="2"/>
+    <line x1="140" y1="20" x2="140" y2="130" stroke="#1B3B36" stroke-width="2" stroke-dasharray="2 3"/>
+    <text x="205" y="79" font-family="Nunito" font-size="10" fill="#1B3B36">Equator</text>
+    <text x="140" y="15" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">axis</text>
+  `),
+  landformTypes: () => svgWrap(`
+    <path d="M20 110 L55 55 L90 110 Z" fill="#8A8A8A"/>
+    <text x="55" y="125" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">mountain</text>
+    <rect x="105" y="85" width="60" height="25" fill="#7ED957"/>
+    <text x="135" y="125" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">plain</text>
+    <path d="M180 110 L180 75 L235 75 L235 110 Z" fill="#E6A800"/>
+    <text x="207" y="125" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">plateau</text>
+  `),
+  timelineEmpire: () => svgWrap(`
+    <line x1="20" y1="75" x2="260" y2="75" stroke="#1B3B36" stroke-width="3" marker-end="url(#tl1)"/>
+    <circle cx="60" cy="75" r="6" fill="#FFC93C"/><text x="60" y="100" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">earlier</text>
+    <circle cx="150" cy="75" r="6" fill="#7ED957"/><text x="150" y="100" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">then</text>
+    <circle cx="230" cy="75" r="6" fill="#FF6B5B"/><text x="230" y="100" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">later</text>
+    <defs><marker id="tl1" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#1B3B36"/></marker></defs>
+  `),
+  govStructure: () => svgWrap(`
+    <rect x="100" y="15" width="80" height="28" fill="#FFC93C" stroke="#1B3B36" stroke-width="2" rx="5"/>
+    <text x="140" y="34" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">District</text>
+    <path d="M140 43 L70 65 M140 43 L210 65" stroke="#1B3B36" stroke-width="2"/>
+    <rect x="30" y="65" width="80" height="28" fill="#7ED957" stroke="#1B3B36" stroke-width="2" rx="5"/>
+    <text x="70" y="84" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">Block/Mandal</text>
+    <rect x="170" y="65" width="80" height="28" fill="#7ED957" stroke="#1B3B36" stroke-width="2" rx="5"/>
+    <text x="210" y="84" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">Block/Mandal</text>
+    <path d="M70 93 L70 110 M210 93 L210 110" stroke="#1B3B36" stroke-width="2"/>
+    <rect x="30" y="110" width="80" height="28" fill="#4FC3E8" stroke="#1B3B36" stroke-width="2" rx="5"/>
+    <text x="70" y="129" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">Village</text>
+    <rect x="170" y="110" width="80" height="28" fill="#4FC3E8" stroke="#1B3B36" stroke-width="2" rx="5"/>
+    <text x="210" y="129" text-anchor="middle" font-family="Nunito" font-size="10" fill="#1B3B36">Village</text>
+  `),
+  tradeFlow: () => svgWrap(`
+    <circle cx="35" cy="75" r="24" fill="#EAF6EE" stroke="#1D8A6C" stroke-width="2"/>
+    <text x="35" y="79" text-anchor="middle" font-family="Nunito" font-size="9" fill="#1B3B36">Farmer</text>
+    <path d="M60 75 L95 75" stroke="#1B3B36" stroke-width="2" marker-end="url(#tf1)"/>
+    <circle cx="120" cy="75" r="24" fill="#FFF6E5" stroke="#E6A800" stroke-width="2"/>
+    <text x="120" y="79" text-anchor="middle" font-family="Nunito" font-size="9" fill="#1B3B36">Mandi</text>
+    <path d="M145 75 L180 75" stroke="#1B3B36" stroke-width="2" marker-end="url(#tf1)"/>
+    <circle cx="205" cy="75" r="24" fill="#FDEAE7" stroke="#FF6B5B" stroke-width="2"/>
+    <text x="205" y="72" text-anchor="middle" font-family="Nunito" font-size="9" fill="#1B3B36">City</text>
+    <text x="205" y="84" text-anchor="middle" font-family="Nunito" font-size="9" fill="#1B3B36">Market</text>
+    <defs><marker id="tf1" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#1B3B36"/></marker></defs>
+  `)
+};
+function getDiagramSvg(type) {
+  const builder = DIAGRAM_BUILDERS[type];
+  return builder ? builder() : "";
+}
+
+function renderQuizQuestion(question, { heartsLeft, timerText, progressLabel, mastery, onAnswer }) {
   const shuffledOpts = question.options.map((text, idx) => ({ text, idx })).sort(() => Math.random() - 0.5);
+
+  const masteryHtml = mastery ? `
+    <div class="mastery-bar-wrap">
+      <div class="mastery-bar-track"><div class="mastery-bar-fill" id="masteryBarFill" style="width:${Math.round((mastery.mastered / mastery.total) * 100)}%;"></div></div>
+      <div class="mastery-bar-text" id="masteryBarText">Mastered ${mastery.mastered} / ${mastery.total}</div>
+    </div>` : "";
 
   const area = document.getElementById("playArea");
   area.innerHTML = `
@@ -507,11 +821,12 @@ function renderQuizQuestion(question, { heartsLeft, timerText, progressLabel, on
       ${heartsLeft !== undefined ? `<span class="hearts">${"❤️".repeat(heartsLeft)}${"🖤".repeat(Math.max(0, 3 - heartsLeft))}</span>` : ""}
       ${timerText !== undefined ? `<span class="timer-badge" id="timerBadge">${timerText}</span>` : ""}
     </div>
+    ${masteryHtml}
     <div class="question-card">
       <span class="difficulty-tag ${question.difficulty}">${question.difficulty.toUpperCase()}</span>
       <div class="question-text">${question.q}</div>
       <div class="options-list" id="optionsList"></div>
-      <div class="explain-box" id="explainBox"><span class="lbl">Why:</span><span id="explainText"></span></div>
+      <div class="explain-box" id="explainBox"></div>
       <div class="next-btn-wrap" id="nextBtnWrap"></div>
     </div>
   `;
@@ -525,20 +840,29 @@ function renderQuizQuestion(question, { heartsLeft, timerText, progressLabel, on
       if (!isCorrect) {
         [...list.children][question.answer]?.classList.add("correct");
       }
-      document.getElementById("explainText").textContent = question.explain;
-      document.getElementById("explainBox").classList.add("show");
-      document.getElementById("nextBtnWrap").innerHTML = `<button class="btn" id="nextQuestionBtn">Next →</button>`;
+      const explainBox = document.getElementById("explainBox");
+      explainBox.innerHTML = buildExplainHtml(question, isCorrect);
+      explainBox.classList.toggle("wrong-answer", !isCorrect);
+      explainBox.classList.add("show");
+      document.getElementById("nextBtnWrap").innerHTML = `<button class="btn" id="nextQuestionBtn">${isCorrect ? "Next →" : "Try the next one →"}</button>`;
       onAnswer(isCorrect, idx);
     });
     list.appendChild(btn);
   });
 }
 
-function updateQuizHud(heartsLeft, progressLabel) {
+function updateQuizHud(heartsLeft, progressLabel, mastery) {
   const topline = document.querySelector(".quiz-topline");
-  if (!topline) return;
-  const spans = topline.querySelectorAll("span");
-  if (spans[0]) spans[0].textContent = progressLabel;
+  if (topline) {
+    const spans = topline.querySelectorAll("span");
+    if (spans[0]) spans[0].textContent = progressLabel;
+  }
+  if (mastery) {
+    const fill = document.getElementById("masteryBarFill");
+    const text = document.getElementById("masteryBarText");
+    if (fill) fill.style.width = Math.round((mastery.mastered / mastery.total) * 100) + "%";
+    if (text) text.textContent = `Mastered ${mastery.mastered} / ${mastery.total}`;
+  }
 }
 
 /* ============================================================
