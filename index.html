@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+<title>Expedition Class 6 — Learning Adventure</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Nunito:wght@500;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- persistent top bar (hidden on home) -->
+  <div class="topbar" id="topbar" style="display:none;">
+    <button class="topbar-back" id="btnBack" aria-label="Go back">←</button>
+    <div class="topbar-stats">
+      <div class="stat-pill">🪙 <span id="statCoins">0</span></div>
+      <div class="stat-pill">⭐ <span id="statXp">0</span> XP</div>
+      <div class="stat-pill">🔥 <span id="statStreak">0</span> day</div>
+    </div>
+  </div>
+
+  <!-- ============ HOME SCREEN ============ -->
+  <section class="screen active" id="screen-home">
+    <div class="hero-wrap">
+      <div class="hero-emoji-row">🗺️🧭🌿</div>
+      <h1 class="hero-title">Expedition <span class="accent">Class 6</span></h1>
+      <p class="hero-sub">Explore jungle trails of Maths, Science, Social Studies, English &amp; Telugu. Answer, earn coins, unlock the next stop on the map!</p>
+    </div>
+
+    <div class="card name-form" id="nameFormCard">
+      <label for="playerNameInput">What's your explorer name?</label>
+      <input type="text" id="playerNameInput" maxlength="20" placeholder="Type your name...">
+      <button class="btn wide" id="btnStartLearning">Start Learning 🚀</button>
+    </div>
+
+    <div class="card name-form" id="welcomeBackCard" style="display:none;">
+      <label id="welcomeBackLabel">Welcome back!</label>
+      <button class="btn wide" id="btnContinue">Continue Adventure 🚀</button>
+      <button class="btn wide ghost" id="btnSwitchExplorer" style="margin-top:10px; color:var(--ink); border-color:var(--jungle-canopy);">Not you? Switch explorer</button>
+    </div>
+
+    <div class="home-progress" id="homeProgressWrap" style="display:none;">
+      <div style="display:flex; justify-content:space-between; font-family:var(--font-display); font-size:14px;">
+        <span>Overall map progress</span>
+        <span id="homeProgressPct">0%</span>
+      </div>
+      <div class="progress-track"><div class="progress-fill" id="homeProgressFill" style="width:0%;"></div></div>
+    </div>
+  </section>
+
+  <!-- ============ SUBJECT SELECTION ============ -->
+  <section class="screen" id="screen-subjects">
+    <h2 class="section-title">Choose your trail<small>Every subject is its own jungle path</small></h2>
+    <div class="subject-grid" id="subjectGrid"></div>
+  </section>
+
+  <!-- ============ CHAPTER TRAIL MAP ============ -->
+  <section class="screen" id="screen-chapters">
+    <h2 class="section-title" id="chapterScreenTitle">Trail<small id="chapterScreenSub">Pick a chapter</small></h2>
+    <div class="trail-wrap" id="trailWrap"></div>
+    <div class="chapter-blurb-box" id="chapterBlurbBox" style="display:none;"></div>
+  </section>
+
+  <!-- ============ MODE SELECTION ============ -->
+  <section class="screen" id="screen-modes">
+    <h2 class="section-title" id="modeScreenTitle">Choose a game mode<small id="modeScreenSub"></small></h2>
+    <div class="mode-grid" id="modeGrid"></div>
+  </section>
+
+  <!-- ============ PLAY SCREEN (dynamic per mode) ============ -->
+  <section class="screen" id="screen-play">
+    <div id="playArea"></div>
+  </section>
+
+  <!-- ============ RESULTS SCREEN ============ -->
+  <section class="screen" id="screen-results">
+    <div class="card results-card" id="resultsCard"></div>
+  </section>
+
+</div>
+
+<div class="badge-toast" id="badgeToast"></div>
+
+<script src="questions.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
