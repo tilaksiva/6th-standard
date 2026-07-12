@@ -832,13 +832,14 @@ function renderQuizQuestion(question, { heartsLeft, timerText, progressLabel, ma
   `;
   const list = document.getElementById("optionsList");
   shuffledOpts.forEach(({ text, idx }) => {
-    const btn = el(`<button class="option-btn"><span class="opt-letter">${letterFor(list.children.length)}</span><span>${text}</span></button>`);
+    const btn = el(`<button class="option-btn" data-original-index="${idx}"><span class="opt-letter">${letterFor(list.children.length)}</span><span>${text}</span></button>`);
     btn.addEventListener("click", () => {
       document.querySelectorAll(".option-btn").forEach(b => b.disabled = true);
       const isCorrect = idx === question.answer;
       btn.classList.add(isCorrect ? "correct" : "wrong");
       if (!isCorrect) {
-        [...list.children][question.answer]?.classList.add("correct");
+        const correctBtn = list.querySelector(`[data-original-index="${question.answer}"]`);
+        if (correctBtn) correctBtn.classList.add("correct");
       }
       const explainBox = document.getElementById("explainBox");
       explainBox.innerHTML = buildExplainHtml(question, isCorrect);
